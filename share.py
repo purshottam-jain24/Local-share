@@ -1,4 +1,5 @@
 from flask import Flask, request, send_from_directory, render_template_string, jsonify
+from flask_socketio import SocketIO, emit
 import os
 
 PORT = 8080
@@ -7,6 +8,9 @@ SHARE_DIR = "shared"
 os.makedirs(SHARE_DIR, exist_ok=True)
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+SHARED_TEXT = ""
 
 HTML = """
 <!doctype html>
@@ -107,11 +111,34 @@ a {
 </div>
 
 <div class="card">
+  <h2>📝 Shared Clipboard</h2>
+  <textarea id="sharedText" style="width: 100%; height: 150px; background: #0f172a; color: #e5e7eb; border: 1px solid #334155; border-radius: 6px; padding: 12px; font-family: inherit; resize: vertical;" placeholder="Type here to share text in real-time..."></textarea>
+</div>
+
+<div class="card">
   <h2>📥 Files</h2>
   <div id="fileList">Loading...</div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.js"></script>
 <script>
+const socket = io();
+const sharedText = document.getElementById('sharedText');
+
+socket.on('connect', () => {
+    console.log('Connected to server');
+});
+
+socket.on('text_update', (data) => {
+    if (sharedText.value !== data.text) {
+        sharedText.value = data.text;
+    }
+});
+
+sharedText.addEventListener('input', () => {
+    socket.emit('text_update', { text: sharedText.value });
+});
+
 const fileInput = document.getElementById('fileInput');
 const progressWrap = document.getElementById('progressWrap');
 const progressBar = document.getElementById('progressBar');
@@ -193,5 +220,15 @@ def upload():
 def download(filename):
     return send_from_directory(SHARE_DIR, filename, as_attachment=True)
 
+@socketio.on('connect')
+def handle_connect():
+    emit('text_update', {'text': SHARED_TEXT})
+
+@socketio.on('text_update')
+def handle_text_update(data):
+    global SHARED_TEXT
+    SHARED_TEXT = data['text']
+    emit('text_update', {'text': SHARED_TEXT}, broadcast=True, include_self=False)
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+    socketio.run(app, host="0.0.0.0", port=PORT, allow_unsafe_werkzeug=True)
