@@ -2,8 +2,7 @@
 REM LocalShare launcher for Windows - double-click to run.
 REM Creates a virtual environment on first run, installs dependencies,
 REM starts the server and opens it in your browser.
-REM   start.bat          start (HTTPS)
-REM   start.bat --http   start over plain HTTP
+REM   start.bat          start
 setlocal
 cd /d "%~dp0"
 

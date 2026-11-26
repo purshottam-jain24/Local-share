@@ -1,9 +1,7 @@
 from flask import Flask, request, send_from_directory, send_file, render_template_string, jsonify
 from flask_socketio import SocketIO, emit
-import logging
 import os
 import socket
-import ssl
 import sys
 import tempfile
 import threading
@@ -12,11 +10,7 @@ import zipfile
 
 PORT = 8080
 SHARE_DIR = "shared"
-CERT_DIR = ".certs"
 
-# HTTPS by default: browsers warn about / block downloads served over plain http://.
-# Run `python3 share.py --http` to fall back to plain HTTP.
-USE_HTTPS = "--http" not in sys.argv
 # `--open` opens LocalShare in this computer's browser once the server is up.
 OPEN_BROWSER = "--open" in sys.argv
 
@@ -40,82 +34,7 @@ def lan_ip():
 
 
 def base_url():
-    return f"{'https' if USE_HTTPS else 'http'}://{lan_ip()}:{PORT}"
-
-
-def ensure_cert():
-    """Create a self-signed certificate (once) for HTTPS on the local network."""
-    cert = os.path.join(CERT_DIR, "cert.pem")
-    key = os.path.join(CERT_DIR, "key.pem")
-    if os.path.exists(cert) and os.path.exists(key):
-        return cert, key
-
-    # Generated in Python (not the openssl CLI) so it also works on Windows.
-    import datetime
-    import ipaddress
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
-
-    pkey = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "LocalShare")])
-    alt_names = [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
-    if lan_ip() != "127.0.0.1":
-        alt_names.append(x509.IPAddress(ipaddress.ip_address(lan_ip())))
-    now = datetime.datetime.now(datetime.timezone.utc)
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(pkey.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=825))
-        .add_extension(x509.SubjectAlternativeName(alt_names), critical=False)
-        .sign(pkey, hashes.SHA256())
-    )
-
-    os.makedirs(CERT_DIR, exist_ok=True)
-    with open(key, "wb") as f:
-        f.write(pkey.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        ))
-    with open(cert, "wb") as f:
-        f.write(certificate.public_bytes(serialization.Encoding.PEM))
-    return cert, key
-
-
-class LazyHandshakeContext(ssl.SSLContext):
-    """Werkzeug does the TLS handshake inside accept(), on the main thread, so a
-    single idle connection (browsers open spare ones in advance) freezes the whole
-    server. Deferring the handshake moves it to the per-request worker thread."""
-
-    def wrap_socket(self, sock, *args, **kwargs):
-        kwargs["do_handshake_on_connect"] = False
-        return super().wrap_socket(sock, *args, **kwargs)
-
-
-class _HideCertRejections(logging.Filter):
-    """Browsers refuse the self-signed cert on their spare preconnect sockets and
-    log nothing useful; hide those harmless 'SSL error occurred' lines."""
-
-    NOISE = ("TLS_ALERT_CERTIFICATE_UNKNOWN", "TLSV1_ALERT_UNKNOWN_CA",
-             "SSLV3_ALERT_CERTIFICATE_UNKNOWN", "SSLV3_ALERT_BAD_CERTIFICATE")
-
-    def filter(self, record):
-        msg = record.getMessage()
-        return not ("SSL error occurred" in msg and any(n in msg for n in self.NOISE))
-
-
-def make_ssl_context():
-    logging.getLogger("werkzeug").addFilter(_HideCertRejections())
-    cert, key = ensure_cert()
-    ctx = LazyHandshakeContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.load_cert_chain(cert, key)
-    return ctx
+    return f"http://{lan_ip()}:{PORT}"
 
 
 HTML = """
@@ -600,7 +519,7 @@ async function copyText(text, msg) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
-    // navigator.clipboard needs HTTPS; fall back for plain-http LAN access
+    // navigator.clipboard is unavailable over plain http on the LAN; fall back
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed'; ta.style.opacity = '0';
@@ -931,19 +850,14 @@ def port_in_use(port):
 
 
 if __name__ == "__main__":
-    local_url = f"{'https' if USE_HTTPS else 'http'}://localhost:{PORT}"
+    local_url = f"http://localhost:{PORT}"
     if port_in_use(PORT):
         print(f" * Port {PORT} is already in use — LocalShare may already be running.")
         if OPEN_BROWSER:
             webbrowser.open(local_url)
         sys.exit(1)
 
-    ssl_context = make_ssl_context() if USE_HTTPS else None
     if OPEN_BROWSER:
         threading.Timer(1.5, webbrowser.open, args=[local_url]).start()
     print(f" * LocalShare: open {base_url()} on your other devices")
-    if USE_HTTPS:
-        print(" * First visit on each device shows a certificate warning (self-signed);"
-              " choose Advanced -> Proceed once.")
-    socketio.run(app, host="0.0.0.0", port=PORT, allow_unsafe_werkzeug=True,
-                 ssl_context=ssl_context)
+    socketio.run(app, host="0.0.0.0", port=PORT, allow_unsafe_werkzeug=True)

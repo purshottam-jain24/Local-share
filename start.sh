@@ -2,8 +2,7 @@
 # LocalShare launcher for macOS / Linux.
 # Creates a virtual environment on first run, installs dependencies,
 # starts the server and opens it in your browser.
-#   ./start.sh          start (HTTPS)
-#   ./start.sh --http   start over plain HTTP
+#   ./start.sh          start
 set -euo pipefail
 cd "$(dirname "$0")"
 
